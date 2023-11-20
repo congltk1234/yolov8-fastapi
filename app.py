@@ -6,11 +6,11 @@ import numpy as np
 from typing import Optional
 
 from ultralytics import YOLO
-from ultralytics.yolo.utils.plotting import Annotator, colors
+from ultralytics.utils.plotting import Annotator, colors
 
 
 # Initialize the models
-model_sample_model = YOLO("./models/sample_model/yolov8n.pt")
+model_sample_model = YOLO("./models/sample_model/best.pt")
 
 
 def get_image_from_bytes(binary_image: bytes) -> Image:
@@ -84,6 +84,7 @@ def get_model_predict(model: YOLO, input_image: Image, save: bool = False, image
                         conf=conf,
                         save=save, 
                         augment=augment,
+                        save_crop=True,
                         flipud= 0.0,
                         fliplr= 0.0,
                         mosaic = 0.0,
@@ -144,7 +145,7 @@ def detect_sample_model(input_image: Image) -> pd.DataFrame:
         input_image=input_image,
         save=False,
         image_size=640,
-        augment=False,
-        conf=0.5,
+        augment=True,
+        conf=0.4,
     )
     return predict

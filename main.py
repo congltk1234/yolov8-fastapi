@@ -5,7 +5,7 @@ from PIL import Image
 from loguru import logger
 import sys
 
-from fastapi import FastAPI, File, status
+from fastapi import FastAPI, File, status, UploadFile
 from fastapi.responses import RedirectResponse
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -122,6 +122,35 @@ def crop_image_by_predict(image: Image, predict: pd.DataFrame(), crop_class_name
 
 
 ######################### MAIN Func #################################
+@app.post("/upload-file/")
+async def create_upload_file(uploaded_file: UploadFile = File(...)):
+    file_location = f"files/{uploaded_file.filename}"
+    with open(file_location, "wb+") as file_object:
+        file_object.write(uploaded_file.file.read())
+    return {"info": f"file '{uploaded_file.filename}' saved at '{file_location}'"}
+
+
+@app.post("/img_object_detection_crop")
+def img_object_detection_crop(file: bytes = File(...), class_name: str=''):
+    """
+    Object Detection from an image.
+
+    Args:
+        file (bytes): The image file in bytes format.
+    Returns:
+        dict: JSON format containing the Objects Detections.
+    """
+    # Step 2: Convert the image file to an image object
+    input_image = get_image_from_bytes(file)
+
+    # Step 3: Predict from model
+    predict = detect_sample_model(input_image)
+    print(predict)
+
+
+    img_crop = crop_image_by_predict(input_image,predict,class_name)
+
+    return StreamingResponse(content=get_bytes_from_image(img_crop), media_type="image/jpeg")
 
 
 @app.post("/img_object_detection_to_json")
@@ -142,10 +171,11 @@ def img_object_detection_to_json(file: bytes = File(...)):
 
     # Step 3: Predict from model
     predict = detect_sample_model(input_image)
+    print(predict)
 
     # Step 4: Select detect obj return info
     # here you can choose what data to send to the result
-    detect_res = predict[['name', 'confidence']]
+    detect_res = predict
     objects = detect_res['name'].values
 
     result['detect_objects_names'] = ', '.join(objects)
@@ -154,6 +184,7 @@ def img_object_detection_to_json(file: bytes = File(...)):
     # Step 5: Logs and return
     logger.info("results: {}", result)
     return result
+
 
 @app.post("/img_object_detection_to_img")
 def img_object_detection_to_img(file: bytes = File(...)):

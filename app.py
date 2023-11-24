@@ -2,15 +2,30 @@ from PIL import Image
 import io
 import pandas as pd
 import numpy as np
-
+import faiss 
 from typing import Optional
 
 from ultralytics import YOLO
 from ultralytics.utils.plotting import Annotator, colors
 
-
 # Initialize the models
-model_sample_model = YOLO("./models/sample_model/best.pt")
+detect_model = YOLO("./models/best_30epochs.pt")
+
+# Load model for embedding
+from transformers import AutoFeatureExtractor, AutoModel
+from transformers import ViTImageProcessor, ViTModel
+
+extractor = ViTImageProcessor.from_pretrained('google/vit-base-patch16-224-in21k')
+embed_model = ViTModel.from_pretrained('google/vit-base-patch16-224-in21k')
+hidden_dim = embed_model.config.hidden_size
+
+def extract_embeddings(image):
+    image_pp = extractor(image, return_tensors="pt")
+    features = embed_model(**image_pp).last_hidden_state[:, 0].detach().numpy()
+    return features.squeeze()
+
+
+
 
 
 def get_image_from_bytes(binary_image: bytes) -> Image:
@@ -62,7 +77,7 @@ def transform_predict_to_df(results: list, labeles_dict: dict) -> pd.DataFrame:
     predict_bbox['name'] = predict_bbox["class"].replace(labeles_dict)
     return predict_bbox
 
-def get_model_predict(model: YOLO, input_image: Image, save: bool = False, image_size: int = 1248, conf: float = 0.5, augment: bool = False) -> pd.DataFrame:
+def get_model_predict( input_image: Image) -> pd.DataFrame:
     """
     Get the predictions of a model on an input image.
     
@@ -78,20 +93,20 @@ def get_model_predict(model: YOLO, input_image: Image, save: bool = False, image
         pd.DataFrame: A DataFrame containing the predictions.
     """
     # Make predictions
-    predictions = model.predict(
-                        imgsz=image_size, 
-                        source=input_image, 
-                        conf=conf,
-                        save=save, 
-                        augment=augment,
-                        save_crop=True,
+    predictions = detect_model.predict(
+                        imgsz=640,
+                        source=input_image,
+                        conf=0.3,
+                        save=False,
+                        augment=True,
+                        save_crop=False,
                         flipud= 0.0,
                         fliplr= 0.0,
                         mosaic = 0.0,
                         )
     
     # Transform predictions to pandas dataframe
-    predictions = transform_predict_to_df(predictions, model.model.names)
+    predictions = transform_predict_to_df(predictions, detect_model.model.names)
     return predictions
 
 
@@ -110,10 +125,8 @@ def add_bboxs_on_img(image: Image, predict: pd.DataFrame()) -> Image:
     """
     # Create an annotator object
     annotator = Annotator(np.array(image))
-
     # sort predict by xmin value
     predict = predict.sort_values(by=['xmin'], ascending=True)
-
     # iterate over the rows of predict dataframe
     for i, row in predict.iterrows():
         # create the text to be displayed on image
@@ -128,24 +141,58 @@ def add_bboxs_on_img(image: Image, predict: pd.DataFrame()) -> Image:
 
 ################################# Models #####################################
 
+def canAddItem(existingArray, newType):
+    bottoms = {'pants', 'shorts', 'skirt'}
+    top = {'jacket', 'shirt'}
+    newType = newType.lower()
+    # Don't add the same item type twice
+    if newType in existingArray:
+        return False
+    if newType == "shoe":
+        return True
+    # You can't wear both a top and a dress
+    if newType in top and (len(top.intersection(existingArray)) or "dress" in existingArray):
+        return False    
+    if newType == 'dress' and (len(top.intersection(existingArray)) or len(bottoms.intersection(existingArray))):
+        return False
+    # Only add one type of bottom (pants, skirt, etc)
+    if newType in bottoms and (len(bottoms.intersection(existingArray)) or "dress" in existingArray):
+        return False
 
-def detect_sample_model(input_image: Image) -> pd.DataFrame:
-    """
-    Predict from sample_model.
-    Base on YoloV8
+    return True
 
-    Args:
-        input_image (Image): The input image.
 
-    Returns:
-        pd.DataFrame: DataFrame containing the object location.
-    """
-    predict = get_model_predict(
-        model=model_sample_model,
-        input_image=input_image,
-        save=False,
-        image_size=640,
-        augment=True,
-        conf=0.4,
-    )
-    return predict
+def get_outfit_from_detect(df)->pd.DataFrame():
+    outfit =[]
+    addedTypes = []
+
+    df = df.sort_values(by=['confidence'], ascending=False)
+    for item in df.values:
+        itemType = item[-1] # i.e. shorts, top, etc
+        if canAddItem(addedTypes, itemType):
+            addedTypes.append(itemType)
+            outfit.append(item)
+    df = df.head(0)
+
+    for i in outfit:
+        df.loc[len(df)] = i
+     
+    return df
+
+
+
+
+#################
+def get_similar_item(crop_image, label,k):
+    new_embed = extract_embeddings(crop_image)
+    new_embed = np.expand_dims(new_embed, axis=0)
+    index_path = './assets/faiss/'+label+'.bin'
+    load_jacket_embed = faiss.read_index(index_path)
+    f_distances, f_ids = load_jacket_embed.search(new_embed, k=k)  # search k product
+    return f_ids[0],f_distances[0]
+
+
+def make_recommend_outfit_list(prediction_df):
+    outfit = get_outfit_from_detect(prediction_df)
+    
+    pass

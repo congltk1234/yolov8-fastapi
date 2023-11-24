@@ -13,10 +13,7 @@ from fastapi.exceptions import HTTPException
 
 from io import BytesIO
 
-from app import get_image_from_bytes
-from app import detect_sample_model
-from app import add_bboxs_on_img
-from app import get_bytes_from_image
+from app import *
 
 ####################################### logger #################################
 
@@ -95,30 +92,7 @@ def perform_healthcheck():
 
 ######################### Support Func #################################
 
-def crop_image_by_predict(image: Image, predict: pd.DataFrame(), crop_class_name: str,) -> Image:
-    """Crop an image based on the detection of a certain object in the image.
-    
-    Args:
-        image: Image to be cropped.
-        predict (pd.DataFrame): Dataframe containing the prediction results of object detection model.
-        crop_class_name (str, optional): The name of the object class to crop the image by. if not provided, function returns the first object found in the image.
-    
-    Returns:
-        Image: Cropped image or None
-    """
-    crop_predicts = predict[(predict['name'] == crop_class_name)]
 
-    if crop_predicts.empty:
-        raise HTTPException(status_code=400, detail=f"{crop_class_name} not found in photo")
-
-    # if there are several detections, choose the one with more confidence
-    if len(crop_predicts) > 1:
-        crop_predicts = crop_predicts.sort_values(by=['confidence'], ascending=False)
-
-    crop_bbox = crop_predicts[['xmin', 'ymin', 'xmax','ymax']].iloc[0].values
-    # crop
-    img_crop = image.crop(crop_bbox)
-    return(img_crop)
 
 
 ######################### MAIN Func #################################
@@ -130,8 +104,29 @@ async def create_upload_file(uploaded_file: UploadFile = File(...)):
     return {"info": f"file '{uploaded_file.filename}' saved at '{file_location}'"}
 
 
-@app.post("/img_object_detection_crop")
-def img_object_detection_crop(file: bytes = File(...), class_name: str=''):
+
+def image_grid(imgs, rows, cols):
+            w,h = imgs[1].size
+            grid = Image.new('RGB', size=(cols*w, rows*h))
+            for i, img in enumerate(imgs): grid.paste(img, box=(i%cols*w, i//cols*h))
+            return grid
+
+def expand2square(pil_img, background_color=(0, 0, 0)):
+    width, height = pil_img.size
+    if width == height:
+        return pil_img
+    elif width > height:
+        result = Image.new(pil_img.mode, (width, width), background_color)
+        result.paste(pil_img, (0, (width - height) // 2))
+        return result
+    else:
+        result = Image.new(pil_img.mode, (height, height), background_color)
+        result.paste(pil_img, ((height - width) // 2, 0))
+        return result
+
+        
+@app.post("/img_object_detection_outfit")
+def img_object_detection_outfit(file: bytes = File(...)):
     """
     Object Detection from an image.
 
@@ -142,15 +137,38 @@ def img_object_detection_crop(file: bytes = File(...), class_name: str=''):
     """
     # Step 2: Convert the image file to an image object
     input_image = get_image_from_bytes(file)
-
     # Step 3: Predict from model
-    predict = detect_sample_model(input_image)
-    print(predict)
+    predict = get_model_predict(input_image)
 
+    outfit = get_outfit_from_detect(predict)
 
-    img_crop = crop_image_by_predict(input_image,predict,class_name)
+    for i in range(outfit.shape[0]):
+        crop_bbox = outfit[['xmin', 'ymin', 'xmax','ymax']].iloc[i].values
+        img_crop = input_image.crop(crop_bbox)   # Crop
+        label=outfit['name'].iloc[i]
+        f_ids, f_distances = get_similar_item(img_crop, label=label,k=3)
+        print(label,': ',f_ids)
+        
+        name_file = './assets/csv/'+label+'.csv'
+        articles = pd.read_csv(name_file)
 
-    return StreamingResponse(content=get_bytes_from_image(img_crop), media_type="image/jpeg")
+        retrieved_examples = []
+        for i in f_ids:
+            name_file = './assets/img/'+articles['path'][i]
+            list_image = Image.open(name_file)
+            retrieved_examples.append(list_image)
+            output_list = [expand2square(img_crop)]
+            output_list.extend(retrieved_examples)
+            recommend = image_grid(output_list, 1, len(output_list))
+        recommend.show()    
+    # print(outfit)
+    result=json.dumps(f_ids.tolist())
+    # objects = outfit['name'].values
+    # result['detect_objects_names'] = ', '.join(objects)
+    # result['detect_objects'] = json.loads(outfit.to_json(orient='records'))
+    # Step 5: Logs and return
+    logger.info("results: {}", result)
+    return result
 
 
 @app.post("/img_object_detection_to_json")
@@ -165,22 +183,16 @@ def img_object_detection_to_json(file: bytes = File(...)):
     """
     # Step 1: Initialize the result dictionary with None values
     result={'detect_objects': None}
-
     # Step 2: Convert the image file to an image object
     input_image = get_image_from_bytes(file)
-
     # Step 3: Predict from model
-    predict = detect_sample_model(input_image)
-    print(predict)
-
+    predict = get_model_predict(input_image)
     # Step 4: Select detect obj return info
     # here you can choose what data to send to the result
     detect_res = predict
     objects = detect_res['name'].values
-
     result['detect_objects_names'] = ', '.join(objects)
     result['detect_objects'] = json.loads(detect_res.to_json(orient='records'))
-
     # Step 5: Logs and return
     logger.info("results: {}", result)
     return result
@@ -198,13 +210,10 @@ def img_object_detection_to_img(file: bytes = File(...)):
     """
     # get image from bytes
     input_image = get_image_from_bytes(file)
-
     # model predict
-    predict = detect_sample_model(input_image)
-
+    predict = get_model_predict(input_image)
     # add bbox on image
     final_image = add_bboxs_on_img(image = input_image, predict = predict)
-
     # return image in bytes format
     return StreamingResponse(content=get_bytes_from_image(final_image), media_type="image/jpeg")
 

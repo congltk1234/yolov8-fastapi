@@ -96,15 +96,6 @@ def perform_healthcheck():
 
 
 ######################### MAIN Func #################################
-@app.post("/upload-file/")
-async def create_upload_file(uploaded_file: UploadFile = File(...)):
-    file_location = f"files/{uploaded_file.filename}"
-    with open(file_location, "wb+") as file_object:
-        file_object.write(uploaded_file.file.read())
-    return {"info": f"file '{uploaded_file.filename}' saved at '{file_location}'"}
-
-
-
 def image_grid(imgs, rows, cols):
             w,h = imgs[1].size
             grid = Image.new('RGB', size=(cols*w, rows*h))
@@ -147,19 +138,22 @@ def img_object_detection_outfit(file: bytes = File(...)):
         img_crop = input_image.crop(crop_bbox)   # Crop
         label=outfit['name'].iloc[i]
         f_ids, f_distances = get_similar_item(img_crop, label=label,k=3)
-        print(label,': ',f_ids)
         
         name_file = './assets/csv/'+label+'.csv'
         articles = pd.read_csv(name_file)
-
+        id_articles = []
         retrieved_examples = []
         for i in f_ids:
             name_file = './assets/img/'+articles['path'][i]
+            id_articles.append(articles['article_id'][i])
             list_image = Image.open(name_file)
             retrieved_examples.append(list_image)
             output_list = [expand2square(img_crop)]
             output_list.extend(retrieved_examples)
             recommend = image_grid(output_list, 1, len(output_list))
+        
+        
+        print(label,': ',id_articles)
         recommend.show()    
     # print(outfit)
     result=json.dumps(f_ids.tolist())
